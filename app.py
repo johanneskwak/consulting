@@ -151,8 +151,9 @@ def pick_new_scenario():
     return new_scenario
 
 def pass_turn():
-    st.session_state.hp = max(0, st.session_state.hp + 5)
-    st.session_state.mp = min(100, max(0, st.session_state.mp + 5))
+    # 매턴 HP와 MP 10씩 회복으로 상향 조정
+    st.session_state.hp = max(0, st.session_state.hp + 10)
+    st.session_state.mp = min(100, max(0, st.session_state.mp + 10))
     
     st.session_state.turn += 1
     
@@ -163,7 +164,7 @@ def pass_turn():
     st.session_state.current_scenario = pick_new_scenario()
     st.session_state.ceo_blocking = False
     st.session_state.pending_solution = None
-    add_log(f"턴 종료. (HP/MP 5 자동 회복) 새로운 위기가 보고되었습니다.")
+    add_log(f"턴 종료. (HP/MP 10 자동 회복) 새로운 위기가 보고되었습니다.")
 
 def apply_solution_effects(choice_key):
     scenario = st.session_state.current_scenario
@@ -185,19 +186,16 @@ if st.session_state.scene == 'lobby':
     
     with st.expander("🏆 게임 목표 및 승리 조건 (필독)", expanded=True):
         st.markdown("""
-        **1. 목표 하달:** 게임 시작 시 클라이언트(회사)가 **원하는 구체적인 목표(미션)**가 무작위로 주어집니다.
-        **2. 전략적 선택:** 20턴 동안 파산을 막으면서, 주어진 미션의 조건을 달성할 수 있도록 지표를 올리세요. 
-        **3. 사장님 설득:** 솔루션 실행 시 **30% 확률**로 사장님이 반대합니다. MP를 소모해 논리로 제압하세요.
-        **4. 직업 카드 방어:** 특정 위기가 발생했을 때 인벤토리의 카드를 사용해 즉시 해결하거나 피해를 줄이세요.
-           - 변호사/노무사: 비용 0으로 완벽 방어
-           - 회계사/세무사: 강력한 세금 폭탄의 비용을 50%, 30% 감면 (일부 HP 소모됨)
+        **1. 목표 하달:** 게임 시작 시 클라이언트가 원하는 **구체적인 목표(미션)**가 무작위로 주어집니다.
+        **2. 전략적 선택:** 20턴 동안 파산을 막으며 목표 조건을 달성하세요. 매 턴 HP/MP가 10씩 회복됩니다.
+        **3. 파산 주의:** 위기가 닥쳤을 때 실행할 수 있는 선택지가 하나도 없으면 **즉시 파산(게임 오버)**합니다.
+        **4. 직업 카드 방어:** 특정 위기 발생 시 인벤토리의 카드를 사용해 즉시 해결하거나 피해를 줄이세요.
         """)
         
     st.metric("보유 자본금 (수임료)", f"{st.session_state.global_money} 만원")
     
     st.subheader("🤝 네트워킹 파티 (직업 스카우트)")
     
-    # 4가지 카드 스카우트 그리드
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.info("**변호사 (500만)**\n\n법무/소송 완벽 방어\n**(최대 5회)**")
@@ -302,11 +300,11 @@ elif st.session_state.scene == 'game':
             for card_name, card_info in card_solvers.items():
                 if card_name in st.session_state.card_charges and st.session_state.card_charges[card_name] > 0:
                     if st.button(f"🛡️ [{card_name} 사용] {card_info['desc']} (남은 횟수: {st.session_state.card_charges[card_name]}회)", type="primary"):
-                        if st.session_state.hp <= card_info['hp_cost']:
-                            st.warning(f"카드를 써도 방어에 필요한 최소 HP({card_info['hp_cost']})가 부족하여 파산합니다!")
+                        if st.session_state.hp < card_info['hp_cost']:
+                            st.warning(f"카드를 써도 방어에 필요한 최소 자금({card_info['hp_cost']})이 부족합니다!")
                         else:
                             st.session_state.card_charges[card_name] -= 1
-                            st.session_state.hp -= card_info['hp_cost'] # 카드 사용에 따른 HP 소모 (방어 후 남은 데미지)
+                            st.session_state.hp -= card_info['hp_cost']
                             
                             for stat_key, value in card_info['stats'].items():
                                 st.session_state.stats[stat_key] = min(100, max(0, st.session_state.stats[stat_key] + value))
@@ -317,13 +315,27 @@ elif st.session_state.scene == 'game':
             
             st.subheader("⚡ 컨설팅 솔루션 제안")
             choices = scenario['choices']
+            
+            # 선택지 중 단 하나라도 실행 가능한지 확인하는 로직 (모두 불가능하면 강제 게임 오버)
+            can_afford_any = False
             for key, choice_data in choices.items():
-                if st.button(f"{key}: {choice_data['text']}", use_container_width=True):
-                    if st.session_state.hp <= choice_data['hp']:
-                        st.warning("자금(HP)이 부족합니다!")
-                    elif st.session_state.mp < choice_data['mp']:
-                        st.warning("행동력(MP)이 부족합니다!")
-                    else:
+                if st.session_state.hp >= choice_data['hp'] and st.session_state.mp >= choice_data['mp']:
+                    can_afford_any = True
+                    break
+            
+            if not can_afford_any:
+                st.error("🚨 자금(HP) 또는 행동력(MP)이 완전히 바닥나 더 이상 어떤 솔루션도 실행할 수 없습니다! 회사가 버티지 못합니다.")
+                if st.button("파산 처리 (결과 보기)", use_container_width=True, type="primary"):
+                    st.session_state.hp = 0  # 강제 파산
+                    st.session_state.scene = 'ending'
+                    st.rerun()
+            else:
+                for key, choice_data in choices.items():
+                    # 버튼 비활성화 시각 효과를 위해 disabled 속성 활용
+                    is_disabled = st.session_state.hp < choice_data['hp'] or st.session_state.mp < choice_data['mp']
+                    btn_text = f"{key}: {choice_data['text']} (HP -{choice_data['hp']}, MP -{choice_data['mp']})"
+                    
+                    if st.button(btn_text, use_container_width=True, disabled=is_disabled):
                         if random.random() < 0.3:
                             st.session_state.pending_solution = key
                             st.session_state.ceo_blocking = True
